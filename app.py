@@ -7,7 +7,6 @@ st.set_page_config(page_title="Alternative Topographies", page_icon="☎️")
 st.title("Alternative Topographies")
 st.caption("A multi-sensory installation by Jeremy Starn")
 
-# --- DIAGNOSTICS SIDEBAR ---
 st.sidebar.header("System Diagnostics")
 
 if "GEMINI_API_KEY" in st.secrets:
@@ -20,7 +19,6 @@ else:
 
 st.sidebar.write(f"Identity File: {'✅ Found' if os.path.exists(IDENTITY_FILE) else '❌ Missing'}")
 
-# --- MAIN INTERFACE ---
 st.write("")
 
 if st.button("📞 Pick Up Receiver", use_container_width=True):
