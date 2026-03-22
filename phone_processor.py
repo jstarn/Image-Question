@@ -1,21 +1,27 @@
 import os
 import subprocess
+import time
 
 # --- LIGHTWEIGHT SLIDERS ---
-# These match your "Child-Whisper" calibration 
 LOW_CUT = 600           
 HIGH_CUT = 4500         
-COMPRESS_RATIO = "8:1"    # Magnifies tiny gasps and whispers [cite: 5]
-OVERALL_GAIN = "18dB"     # Boosts the 'soft' SSML volume for the receiver
+COMPRESS_RATIO = "8:1"    
+OVERALL_GAIN = "18dB"     
 DIAL_TONE_DUR = 3         
 
 def process_telephone_audio(filepath: str):
-    temp_output = filepath.replace(".wav", "_processed.wav")
+    """
+    Processes audio using FFmpeg. Uses a temporary unique filename 
+    to prevent file-access conflicts on the web server.
+    """
+    if not os.path.exists(filepath):
+        print(f"[ERROR] Processor couldn't find: {filepath}")
+        return filepath
+
+    # Create a unique temporary output name
+    temp_output = filepath.replace(".wav", f"_proc_{int(time.time())}.wav")
     
-    # FFmpeg Pipeline: 
-    # 1. Bandpass filter (600-4500Hz) to shrink the voice 
-    # 2. Compand (Compression) to make the gasps urgent [cite: 5]
-    # 3. Sine generation for the 1990s dial tone 
+    # FFmpeg Pipeline for Telephone Effect
     cmd = [
         'ffmpeg', '-y', '-i', filepath,
         '-filter_complex', 
@@ -26,10 +32,17 @@ def process_telephone_audio(filepath: str):
     ]
 
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        os.replace(temp_output, filepath)
-        print(f"[PI-OPTIMIZED] FFmpeg processed: {os.path.basename(filepath)}")
+        # Run FFmpeg
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        
+        # Atomically replace the old file with the new one
+        if os.path.exists(temp_output):
+            os.replace(temp_output, filepath)
+            print(f"[CLOUD-READY] FFmpeg finished: {os.path.basename(filepath)}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"[FFMPEG CRASH] {e.stderr}")
     except Exception as e:
-        print(f"[ERROR] FFmpeg failed: {e}. Make sure ffmpeg is installed (sudo apt install ffmpeg).")
+        print(f"[PROCESSOR ERROR] {e}")
 
     return filepath
