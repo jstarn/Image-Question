@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import traceback
 from expert1 import generate_whisper, BASE_DIR, IDENTITY_FILE
 
 st.set_page_config(page_title="Alternative Topographies", page_icon="☎️")
@@ -25,17 +26,18 @@ if st.button("📞 Pick Up Receiver", use_container_width=True):
     if not key_found:
         st.error("Cannot connect. The GEMINI_API_KEY is missing from Streamlit Secrets.")
     else:
-        with st.spinner("The line crackles... summoning a whisper (~15 seconds)"):
-            audio_bytes = generate_whisper()
+        try:
+            with st.spinner("The line crackles... summoning a whisper (~15 seconds)"):
+                audio_bytes = generate_whisper()
 
-        if audio_bytes:
-            st.audio(audio_bytes, format="audio/wav", autoplay=True)
-            st.info("The spirit is whispering...")
-        else:
-            st.error(
-                "The line went dead. Check the **Manage App → Logs** panel for "
-                "[ERROR] or [FFMPEG ERROR] lines."
-            )
+            if audio_bytes:
+                st.audio(audio_bytes, format="audio/wav", autoplay=True)
+                st.info("The spirit is whispering...")
+            else:
+                st.error("generate_whisper() returned None — see error details below.")
+        except Exception as e:
+            st.error(f"**Exception:** {type(e).__name__}: {e}")
+            st.code(traceback.format_exc())
 
 if st.button("🔌 Hang Up", use_container_width=True):
     st.rerun()
