@@ -3,90 +3,113 @@ import json
 import base64
 import urllib.request
 import wave
-import time
+import io
+import subprocess
 import streamlit as st
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
 
-from phone_processor import process_telephone_audio
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-AUDIO_DIR = os.path.join(BASE_DIR, "audio_files")
-
-if not os.path.exists(AUDIO_DIR):
-    os.makedirs(AUDIO_DIR, exist_ok=True)
-
-STAGED_PLAYBACK_FILE = os.path.join(AUDIO_DIR, "current_daydream.wav")
-NEXT_TEMP_FILE = os.path.join(AUDIO_DIR, "next_daydream_temp.wav")
 IDENTITY_FILE = os.path.join(BASE_DIR, "Your_Identity.txt")
-KNOWLEDGE_FILE = os.path.join(BASE_DIR, "Your_Consciousness.txt")
 
 
-def prepare_next_daydream():
-    """Summons the whisper using stable 1.5 models."""
+def generate_whisper():
+    """
+    Generates a whisper and returns processed audio as bytes (WAV).
+    Returns None on any failure — check Streamlit logs for [ERROR] lines.
+    """
     if not GEMINI_API_KEY:
-        print("[ERROR] No API Key found in Secrets.")
-        return False
+        print("[ERROR] No GEMINI_API_KEY in Streamlit Secrets.")
+        return None
 
     try:
-        # --- Text Generation ---
-        text_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={GEMINI_API_KEY}"
-
-        with open(IDENTITY_FILE, 'r') as f:
+        # --- Step 1: Generate whisper text ---
+        text_url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/gemini-1.5-pro:generateContent?key={GEMINI_API_KEY}"
+        )
+        with open(IDENTITY_FILE, "r") as f:
             identity = f.read()
-        prompt = f"IDENTITY: {identity}\nTASK: speak as a spirit inside a phone."
 
+        prompt = f"IDENTITY: {identity}\nTASK: speak as a spirit inside a phone."
         req_text = urllib.request.Request(
             text_url,
-            data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
+            data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req_text) as response:
-            whisper_text = json.loads(response.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text']
+        with urllib.request.urlopen(req_text) as resp:
+            whisper_text = (
+                json.loads(resp.read().decode("utf-8"))
+                ["candidates"][0]["content"]["parts"][0]["text"]
+            )
+        print(f"[OK] Whisper text generated ({len(whisper_text)} chars)")
 
-        # --- Audio Generation ---
-        audio_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # --- Step 2: Generate audio ---
+        audio_url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        )
         audio_payload = {
             "contents": [{"parts": [{"text": f"<speak>{whisper_text}</speak>"}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
-                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}
-            }
+                "speechConfig": {
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}
+                },
+            },
         }
-
         req_audio = urllib.request.Request(
             audio_url,
-            data=json.dumps(audio_payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
+            data=json.dumps(audio_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req_audio) as response:
-            audio_bytes = base64.b64decode(
-                json.loads(response.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['inlineData']['data']
+        with urllib.request.urlopen(req_audio) as resp:
+            raw_pcm = base64.b64decode(
+                json.loads(resp.read().decode("utf-8"))
+                ["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
             )
+        print(f"[OK] Raw audio received ({len(raw_pcm)} bytes)")
 
-        # Write raw audio to temp file
-        with wave.open(NEXT_TEMP_FILE, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(24000)
-            wav_file.writeframes(audio_bytes)
+        # --- Step 3: Wrap PCM in WAV (in memory) ---
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(raw_pcm)
+        raw_wav_bytes = wav_buffer.getvalue()
 
-        # Apply telephone effect (modifies NEXT_TEMP_FILE in-place)
-        process_telephone_audio(NEXT_TEMP_FILE)
+        # --- Step 4: Apply telephone effect via FFmpeg (stdin → stdout, no files) ---
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "wav", "-i", "pipe:0",
+            "-filter_complex",
+            (
+                "[0:a]highpass=f=600,lowpass=f=4500,"
+                "compand=attacks=0:points=-80/-80|-20/-10|0/0,"
+                "volume=18dB[voice];"
+                "sine=f=350:d=3[s1];"
+                "sine=f=440:d=3[s2];"
+                "[s1][s2]amix=inputs=2,volume=-30dB[dial];"
+                "[dial][voice][dial]concat=n=3:v=0:a=1[out]"
+            ),
+            "-map", "[out]",
+            "-ar", "8000", "-ac", "1",
+            "-f", "wav", "pipe:1",
+        ]
+        result = subprocess.run(
+            cmd,
+            input=raw_wav_bytes,
+            capture_output=True,
+            check=True,
+        )
+        print(f"[OK] FFmpeg finished ({len(result.stdout)} bytes)")
+        return result.stdout
 
-        # FIX: Always promote the temp file to the staged playback file,
-        # regardless of whether a previous one exists. os.replace() is
-        # atomic and will overwrite any stale staged file.
-        if os.path.exists(NEXT_TEMP_FILE):
-            os.replace(NEXT_TEMP_FILE, STAGED_PLAYBACK_FILE)
-            print(f"[OK] Staged whisper ready: {STAGED_PLAYBACK_FILE}")
-        else:
-            print("[ERROR] Temp file missing after processing — FFmpeg may have failed.")
-            return False
-
-        return True
-
+    except subprocess.CalledProcessError as e:
+        print(f"[FFMPEG ERROR] {e.stderr.decode('utf-8', errors='replace')}")
+        return None
     except Exception as e:
-        print(f"[API ERROR] {str(e)}")
-        return False
+        print(f"[ERROR] {type(e).__name__}: {e}")
+        return None
