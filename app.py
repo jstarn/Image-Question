@@ -3,7 +3,7 @@ import os
 import threading
 from expert1 import prepare_next_daydream, STAGED_PLAYBACK_FILE, NEXT_TEMP_FILE
 
-st.set_page_config(page_title="Alternative Topographies", page_icon="☎️")
+st.set_page_config(page_title="Question Images", page_icon="☎️")
 
 st.title("Alternative Topographies")
 st.caption("A multi-sensory installation by Jeremy Starn")
