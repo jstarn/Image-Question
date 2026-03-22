@@ -27,7 +27,7 @@ def generate_whisper():
         # --- Step 1: Generate whisper text ---
         text_url = (
             "https://generativelanguage.googleapis.com/v1beta/"
-            f"models/gemini-1.5-pro:generateContent?key={GEMINI_API_KEY}"
+            f"models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
         )
         with open(IDENTITY_FILE, "r") as f:
             identity = f.read()
@@ -48,7 +48,7 @@ def generate_whisper():
         # --- Step 2: Generate audio ---
         audio_url = (
             "https://generativelanguage.googleapis.com/v1beta/"
-            f"models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+            f"models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
         )
         audio_payload = {
             "contents": [{"parts": [{"text": f"<speak>{whisper_text}</speak>"}]}],
