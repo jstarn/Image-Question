@@ -27,11 +27,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(BASE_DIR, "../audio_cache")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-LATEST_FILE_NAME = "audio/latest_daydream.wav"
+LATEST_FILE_NAME = "audio/latest_daydream.mp3"
 
 # STAGING FILES
-STAGED_PLAYBACK_FILE = os.path.join(AUDIO_DIR, "current_daydream.wav")
-NEXT_TEMP_FILE = os.path.join(AUDIO_DIR, "next_daydream_temp.wav")
+STAGED_PLAYBACK_FILE = os.path.join(AUDIO_DIR, "current_daydream.mp3")
+NEXT_TEMP_FILE = os.path.join(AUDIO_DIR, "next_daydream_temp.mp3")
 
 HISTORY_FILE = os.path.join(BASE_DIR, "../local_memory/daydream_history.txt")
 IDENTITY_FILE = "Your_Identity.txt"
@@ -48,12 +48,8 @@ bucket = storage_client.bucket(BUCKET_NAME)
 def upload_to_bucket(local_path, remote_path):
     try:
         blob = bucket.blob(remote_path)
-        # Set correct MIME type for web playback
-        blob.content_type = "audio/wav"
         blob.upload_from_filename(local_path)
-        # Make public so the web app can fetch
-        blob.make_public()
-        print(f"[CLOUD] Uploaded {remote_path} (public URL: {blob.public_url})")
+        print(f"[CLOUD] Uploaded {remote_path}")
     except Exception as e:
         print(f"[CLOUD ERROR] {e}")
 
@@ -65,14 +61,15 @@ def play_audio(filename):
             import winsound
             winsound.PlaySound(filename, winsound.SND_FILENAME)
         else:
-            subprocess.run(['aplay', '-q', filename], check=True)
+            # Try ffplay if available for mp3
+            subprocess.run(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', filename], check=True)
     except Exception as e:
         print(f"[SYSTEM ERROR - PLAYBACK] {e}")
 
 # --- 5. ASYNC ENGINE ---
 def prepare_next_daydream():
     global conversation_history
-    print("\n[BACKEND] Preparing the next daydream in the background...")
+    print(f"[TRIGGER] Prepare next daydream called at {datetime.now()}")
     
     identity_content = "You are an AI in a telephone."
     if os.path.exists(IDENTITY_FILE):
@@ -108,73 +105,69 @@ def prepare_next_daydream():
     """
 
     try:
+        # --- Text Generation ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}"
-
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.95}
         }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
-        )
-
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
+                                     headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read().decode('utf-8'))
             text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
 
-        # Update memory
+        # --- Update memory ---
         conversation_history.append(text)
         if len(conversation_history) > MEMORY_LIMIT:
             conversation_history.pop(0)
-
         with open(HISTORY_FILE, "a", encoding="utf-8") as f:
             f.write(f"--- {datetime.now()} ---\n{text}\n\n")
-
-        # Upload updated memory to cloud
         upload_to_bucket(HISTORY_FILE, "memory/daydream_history.txt")
 
-        # TTS
+        # --- TTS ---
         selected_voice = random.choice(["Aoede", "Puck"])
-
         ssml_text = f"<speak><prosody volume='soft' rate='fast' pitch='+15st'><break time='300ms'/>{text}<break time='500ms'/></prosody></speak>"
 
         audio_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_API_KEY}"
-
         audio_payload = {
             "contents": [{"parts": [{"text": ssml_text}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": selected_voice}
-                    }
-                }
+                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": selected_voice}}}
             }
         }
-
-        req_audio = urllib.request.Request(
-            audio_url,
-            data=json.dumps(audio_payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
-        )
-
+        req_audio = urllib.request.Request(audio_url, data=json.dumps(audio_payload).encode('utf-8'),
+                                          headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req_audio) as response:
             audio_data = json.loads(response.read().decode('utf-8'))
             b64_audio = audio_data['candidates'][0]['content']['parts'][0]['inlineData']['data']
             audio_bytes = base64.b64decode(b64_audio)
 
-        with wave.open(NEXT_TEMP_FILE, "wb") as wav_file:
+        # --- Save WAV at 8 kHz ---
+        wav_8khz = NEXT_TEMP_FILE.replace(".mp3", "_8khz.wav")
+        with wave.open(wav_8khz, "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
-            wav_file.setframerate(24000)
+            wav_file.setframerate(8000)
             wav_file.writeframes(audio_bytes)
 
-        process_telephone_audio(NEXT_TEMP_FILE)
+        # --- Convert to MP3 for web ---
+        mp3_file = NEXT_TEMP_FILE
+        subprocess.run([
+            "ffmpeg", "-y", "-i", wav_8khz,
+            "-ar", "8000", "-ac", "1",
+            mp3_file
+        ], check=True)
 
-        print(f"[BACKEND] Next daydream ({selected_voice}) processed.")
+        # --- Process for telephone ---
+        process_telephone_audio(mp3_file)
+
+        # --- Upload to Cloud ---
+        upload_to_bucket(mp3_file, f"audio/{os.path.basename(mp3_file)}")
+        upload_to_bucket(mp3_file, LATEST_FILE_NAME)
+
+        print(f"[BACKEND] Next daydream ({selected_voice}) processed at {datetime.now()}")
 
         return True
 
@@ -184,17 +177,14 @@ def prepare_next_daydream():
 
 # --- 6. INSTALLATION LOOP ---
 def run_installation():
-
     print("--- Booting Alternative Topographies (Zero-Lag Manual Mode) ---")
     print(f"Staged file ready: {STAGED_PLAYBACK_FILE}\n")
 
     iteration = 1
 
     while True:
-
         try:
-
-            input(f"\n[READY] Press [ENTER] to pick up (Iteration {iteration})...")
+            input(f"\n[READY] Press [ENTER] to Pick Up The Phone (Iteration {iteration})...")
 
             play_thread = threading.Thread(target=play_audio, args=(STAGED_PLAYBACK_FILE,))
             prep_thread = threading.Thread(target=prepare_next_daydream)
@@ -204,28 +194,27 @@ def run_installation():
 
             play_thread.join()
 
-            input("[BUSY] Press [ENTER] to hang up and stage the next file...")
+            input("[BUSY] Press [ENTER] to hang up and stage the next daydream...")
 
             prep_thread.join()
 
             if os.path.exists(NEXT_TEMP_FILE):
-
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                archive_name = os.path.join(AUDIO_DIR, f"daydream_{timestamp}.wav")
+                archive_name = os.path.join(AUDIO_DIR, f"daydream_{timestamp}.mp3")
 
-                # Archive the current staged file
+                # Archive current staged file
                 os.rename(STAGED_PLAYBACK_FILE, archive_name)
 
-                # Upload archived audio to cloud (with MIME type + public)
+                # Upload archived audio
                 upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}")
 
-                # ALSO update the latest_daydream.wav in cloud (with MIME type + public)
+                # Update latest_daydream.mp3
                 upload_to_bucket(archive_name, LATEST_FILE_NAME)
 
                 # Move next temp file to staged playback
                 os.rename(NEXT_TEMP_FILE, STAGED_PLAYBACK_FILE)
 
-                print(f">> Staged next daydream. Archived: {os.path.basename(archive_name)} (latest_daydream.wav updated)")
+                print(f">> Staged next daydream. Archived: {os.path.basename(archive_name)} (latest_daydream.mp3 updated)")
 
             iteration += 1
 
