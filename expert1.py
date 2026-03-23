@@ -16,7 +16,9 @@ from phone_processor import process_telephone_audio
 # --- 1. CONFIGURATION ---
 api_key = os.getenv("GEMINI_API_KEY")
 
-AUDIO_DIR = "audio_cache"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+AUDIO_DIR = os.path.join(BASE_DIR, "../audio_cache")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 # STAGING FILES
