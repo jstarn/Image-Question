@@ -45,26 +45,15 @@ MEMORY_LIMIT = 3
 storage_client = storage.Client()
 bucket = storage_client.bucket(BUCKET_NAME)
 
-def upload_to_bucket(local_path, remote_path, web_ready=False):
-    """
-    Upload file to GCS bucket.
-    If web_ready=True, convert to 16-bit PCM WAV 44.1kHz first for browser playback.
-    """
-    upload_path = local_path
+def upload_to_bucket(local_path, remote_path):
     try:
-        if web_ready:
-            # Convert to standard WAV for web playback
-            converted_path = local_path.replace(".wav", "_web.wav")
-            subprocess.run([
-                "ffmpeg", "-y", "-i", local_path,
-                "-acodec", "pcm_s16le", "-ar", "44100",
-                converted_path
-            ], check=True)
-            upload_path = converted_path
-
         blob = bucket.blob(remote_path)
-        blob.upload_from_filename(upload_path, content_type="audio/wav")
-        print(f"[CLOUD] Uploaded {remote_path} (web-ready={web_ready})")
+        # Set correct MIME type for web playback
+        blob.content_type = "audio/wav"
+        blob.upload_from_filename(local_path)
+        # Make public so the web app can fetch
+        blob.make_public()
+        print(f"[CLOUD] Uploaded {remote_path} (public URL: {blob.public_url})")
     except Exception as e:
         print(f"[CLOUD ERROR] {e}")
 
@@ -227,11 +216,11 @@ def run_installation():
                 # Archive the current staged file
                 os.rename(STAGED_PLAYBACK_FILE, archive_name)
 
-                # Upload archived audio to cloud (web-ready)
-                upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}", web_ready=True)
+                # Upload archived audio to cloud (with MIME type + public)
+                upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}")
 
-                # ALSO update the latest_daydream.wav in cloud (web-ready)
-                upload_to_bucket(archive_name, LATEST_FILE_NAME, web_ready=True)
+                # ALSO update the latest_daydream.wav in cloud (with MIME type + public)
+                upload_to_bucket(archive_name, LATEST_FILE_NAME)
 
                 # Move next temp file to staged playback
                 os.rename(NEXT_TEMP_FILE, STAGED_PLAYBACK_FILE)
