@@ -1,3 +1,0 @@
-streamlit
-pydub
-google-generativeai
