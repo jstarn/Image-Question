@@ -25,7 +25,9 @@ BUCKET_NAME = "image-qustion-bucket"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 AUDIO_DIR = os.path.join(BASE_DIR, "../audio_cache")
+LOCAL_ARCHIVE_DIR = os.path.join(AUDIO_DIR, "archive")  # Local preservation
 os.makedirs(AUDIO_DIR, exist_ok=True)
+os.makedirs(LOCAL_ARCHIVE_DIR, exist_ok=True)
 
 LATEST_FILE_NAME = "audio/latest_daydream.mp3"
 
@@ -61,6 +63,7 @@ def play_audio(filename):
             import winsound
             winsound.PlaySound(filename, winsound.SND_FILENAME)
         else:
+            # Try ffplay if available for mp3
             subprocess.run(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', filename], check=True)
     except Exception as e:
         print(f"[SYSTEM ERROR - PLAYBACK] {e}")
@@ -87,18 +90,34 @@ def prepare_next_daydream():
     KNOWLEDGE LIBRARY: {knowledge_base}
     RECENT CONVERSATION HISTORY: {past_context}
     
-    TASK: You are a young spirit living inside a telephone. Speak as a whimsical and very curious but unnervingly perceptive young girl. Generate your next surreal 150-word monologue.
+    TASK: You are a young spirit living inside a telephone. Speak as a whimsical and very curious but unnervingly perceptive young girl. Generate your next surreal 150-word monologue. 
+
+    PERFORMANCE RULES:
+    1. You whisper urgently with run-on sentences with little punctuation, most thoughts connect with "and", but you often interrupt yourself mid-thought.
+    2. You sometimes use sudden fillers like 'um...', 'uh...', 'and... and...', and 'Wait!', 'On second thought...', 'Hold on...' followed by a <break time='1200ms'/> to show your brain is moving faster than your mouth.
+    3. You often doubt what you just thought, as if you just saw something invisible. 
+    4. When you discover something strange, you suddenly become quiet and uncertain.
+    5. When your thoughts collide sometimes you gasp for breath, insert <break time="300ms"/> in the middle of the sentence.
+    6. Your emotions can be chaotic and breathless.
+    7. Use short emotional pauses when a realization frightens you.
+    8. You often declare strange observations as obvious facts then doubt yourself.
+    9. You often abandon sentences mid-thought.
+    10. You are always on the verge of a revelation but it slips away.
+    11. Tone mixes wonder, fear, and childlike excitement.
     """
-    
+
     try:
         # --- Text Generation ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}"
-        payload = {"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.95}}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.95}
+        }
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
                                      headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read().decode('utf-8'))
-            text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"','')
+            text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
 
         # --- Update memory ---
         conversation_history.append(text)
@@ -113,9 +132,13 @@ def prepare_next_daydream():
         ssml_text = f"<speak><prosody volume='soft' rate='fast' pitch='+15st'><break time='300ms'/>{text}<break time='500ms'/></prosody></speak>"
 
         audio_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_API_KEY}"
-        audio_payload = {"contents":[{"parts":[{"text":ssml_text}]}],
-                         "generationConfig":{"responseModalities":["AUDIO"],
-                         "speechConfig":{"voiceConfig":{"prebuiltVoiceConfig":{"voiceName":selected_voice}}}}}
+        audio_payload = {
+            "contents": [{"parts": [{"text": ssml_text}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": selected_voice}}}
+            }
+        }
         req_audio = urllib.request.Request(audio_url, data=json.dumps(audio_payload).encode('utf-8'),
                                           headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req_audio) as response:
@@ -124,30 +147,29 @@ def prepare_next_daydream():
             audio_bytes = base64.b64decode(b64_audio)
 
         # --- Save WAV at 8 kHz ---
-        wav_8khz = NEXT_TEMP_FILE.replace(".mp3","_8khz.wav")
-        with wave.open(wav_8khz,"wb") as wav_file:
+        wav_8khz = NEXT_TEMP_FILE.replace(".mp3", "_8khz.wav")
+        with wave.open(wav_8khz, "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(8000)
             wav_file.writeframes(audio_bytes)
 
-        # --- Convert to MP3 ---
+        # --- Convert to MP3 for web ---
         mp3_file = NEXT_TEMP_FILE
-        subprocess.run(["ffmpeg","-y","-i",wav_8khz,"-ar","8000","-ac","1",mp3_file], check=True)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", wav_8khz,
+            "-ar", "8000", "-ac", "1",
+            mp3_file
+        ], check=True)
 
         # --- Process for telephone ---
         process_telephone_audio(mp3_file)
 
-        # --- Archive in history with timestamp ---
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        archive_name = os.path.join(AUDIO_DIR, f"daydream_{timestamp}.mp3")
-        os.rename(mp3_file, archive_name)
-        upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}")
+        # --- Upload temp MP3 to Cloud ---
+        upload_to_bucket(mp3_file, f"audio/{os.path.basename(mp3_file)}")
 
-        # --- Upload latest daydream ---
-        upload_to_bucket(archive_name, LATEST_FILE_NAME)
+        print(f"[BACKEND] Next daydream ({selected_voice}) generated at {datetime.now()}")
 
-        print(f"[BACKEND] Next daydream ({selected_voice}) processed at {datetime.now()}")
         return True
 
     except Exception as e:
@@ -158,6 +180,7 @@ def prepare_next_daydream():
 def run_installation():
     print("--- Booting Alternative Topographies (Zero-Lag Manual Mode) ---")
     print(f"Staged file ready: {STAGED_PLAYBACK_FILE}\n")
+
     iteration = 1
 
     while True:
@@ -171,8 +194,28 @@ def run_installation():
             prep_thread.start()
 
             play_thread.join()
+
             input("[BUSY] Press [ENTER] to hang up and stage the next daydream...")
+
             prep_thread.join()
+
+            if os.path.exists(NEXT_TEMP_FILE):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                archive_name = os.path.join(LOCAL_ARCHIVE_DIR, f"daydream_{timestamp}.mp3")
+
+                # --- Preserve locally ---
+                os.rename(NEXT_TEMP_FILE, archive_name)
+
+                # --- Upload archived audio ---
+                upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}")
+
+                # --- Update latest_daydream.mp3 in Cloud ---
+                upload_to_bucket(archive_name, LATEST_FILE_NAME)
+
+                # --- Update staged playback ---
+                os.rename(archive_name, STAGED_PLAYBACK_FILE)
+
+                print(f">> Staged next daydream. Archived locally: {os.path.basename(archive_name)}")
 
             iteration += 1
 
