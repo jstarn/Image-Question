@@ -27,6 +27,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(BASE_DIR, "../audio_cache")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
+LATEST_FILE_NAME = "audio/latest_daydream.wav"
+
 # STAGING FILES
 STAGED_PLAYBACK_FILE = os.path.join(AUDIO_DIR, "current_daydream.wav")
 NEXT_TEMP_FILE = os.path.join(AUDIO_DIR, "next_daydream_temp.wav")
@@ -205,17 +207,21 @@ def run_installation():
             if os.path.exists(NEXT_TEMP_FILE):
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
                 archive_name = os.path.join(AUDIO_DIR, f"daydream_{timestamp}.wav")
 
+                # Archive the current staged file
                 os.rename(STAGED_PLAYBACK_FILE, archive_name)
 
                 # Upload archived audio to cloud
                 upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}")
 
+                # ALSO update the latest_daydream.wav in cloud
+                upload_to_bucket(archive_name, LATEST_FILE_NAME)
+
+                # Move next temp file to staged playback
                 os.rename(NEXT_TEMP_FILE, STAGED_PLAYBACK_FILE)
 
-                print(f">> Staged next daydream. Archived: {os.path.basename(archive_name)}")
+                print(f">> Staged next daydream. Archived: {os.path.basename(archive_name)} (latest_daydream.wav updated)")
 
             iteration += 1
 
