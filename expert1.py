@@ -142,9 +142,10 @@ def prepare_next_daydream():
         req_audio = urllib.request.Request(audio_url, data=json.dumps(audio_payload).encode('utf-8'),
                                           headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req_audio) as response:
-            audio_data = json.loads(response.read().decode('utf-8'))
-            b64_audio = audio_data['candidates'][0]['content']['parts'][0]['inlineData']['data']
-            audio_bytes = base64.b64decode(b64_audio)
+            raw_response = response.read().decode('utf-8')
+            print("[DEBUG] Raw API response:", raw_response)  # <-- Add this line
+            data = json.loads(raw_response)
+            text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
 
         # --- Save WAV at 8 kHz ---
         wav_8khz = NEXT_TEMP_FILE.replace(".mp3", "_8khz.wav")
