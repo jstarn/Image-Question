@@ -1,28 +1,28 @@
 import os
-from expert1 import prepare_next_daydream, AUDIO_DIR, LATEST_FILE_NAME
+import json
+from expert1 import prepare_next_daydream, AUDIO_DIR
 
 print("\n--- DAYDREAM SHELL TEST ---\n")
 
-# Trigger generation
+# --- 1. Trigger generation with debug ---
 print("[1] Generating next daydream...")
-success = prepare_next_daydream()
+success = prepare_next_daydream(debug=True)  # <-- Add debug=True to get raw API output
 print("[2] Generation complete:", success)
 
-# Check local temp file
-temp_path = os.path.join(AUDIO_DIR, "next_daydream_temp.wav")
-print(f"[3] Local temp file exists: {os.path.exists(temp_path)} ({temp_path})")
+# --- 2. Check local temp file ---
+temp_wav = os.path.join(AUDIO_DIR, "next_daydream_temp_8khz.wav")
+temp_mp3 = os.path.join(AUDIO_DIR, "next_daydream_temp.mp3")
+print(f"[3] Local temp WAV exists: {os.path.exists(temp_wav)} ({temp_wav})")
+print(f"[3b] Local temp MP3 exists: {os.path.exists(temp_mp3)} ({temp_mp3})")
 
-# Check latest staged file if it exists
-staged_path = os.path.join(AUDIO_DIR, "current_daydream.wav")
-print(f"[4] Current staged file exists: {os.path.exists(staged_path)} ({staged_path})")
+# --- 3. Check staged playback ---
+staged_wav = os.path.join(AUDIO_DIR, "current_daydream.wav")
+staged_mp3 = os.path.join(AUDIO_DIR, "current_daydream.mp3")
+print(f"[4] Current staged WAV exists: {os.path.exists(staged_wav)} ({staged_wav})")
+print(f"[4b] Current staged MP3 exists: {os.path.exists(staged_mp3)} ({staged_mp3})")
 
-# Optional: list files in your cloud bucket (requires gsutil configured)
+# --- 4. List files in cloud bucket ---
 print("[5] Listing audio files in cloud bucket...")
 os.system("gsutil ls gs://image-qustion-bucket/audio/")
-
-with urllib.request.urlopen(req) as response:
-    raw_response = response.read().decode('utf-8')
-    print("[DEBUG] Raw API response:", raw_response)  # <-- see what actually comes back
-    data = json.loads(raw_response)
 
 print("\n--- TEST COMPLETE ---\n")
