@@ -20,4 +20,9 @@ print(f"[4] Current staged file exists: {os.path.exists(staged_path)} ({staged_p
 print("[5] Listing audio files in cloud bucket...")
 os.system("gsutil ls gs://image-qustion-bucket/audio/")
 
+with urllib.request.urlopen(req) as response:
+    raw_response = response.read().decode('utf-8')
+    print("[DEBUG] Raw API response:", raw_response)  # <-- see what actually comes back
+    data = json.loads(raw_response)
+
 print("\n--- TEST COMPLETE ---\n")
