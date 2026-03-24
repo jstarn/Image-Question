@@ -1,8 +1,0 @@
-# Ignore local audio files and history
-audio_files/
-daydream_history.txt
-*.wav
-
-# Ignore local secret files
-.env
-.streamlit/secrets.toml
