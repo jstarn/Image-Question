@@ -71,25 +71,25 @@ def play_audio(filename):
 def prepare_next_daydream():
     global conversation_history
     print(f"[TRIGGER] Prepare next daydream called at {datetime.now()}")
-    
+
     identity_content = "You are an AI in a telephone."
     if os.path.exists(IDENTITY_FILE):
         with open(IDENTITY_FILE, 'r', encoding='utf-8') as f:
             identity_content = f.read()
-    
+
     knowledge_base = "You are questioning everything."
     if os.path.exists(KNOWLEDGE_FILE):
         with open(KNOWLEDGE_FILE, 'r', encoding='utf-8') as f:
             knowledge_base = f.read()
 
     past_context = "\n\n".join(conversation_history)
-    
+
     prompt = f"""
     SYSTEM INSTRUCTIONS & IDENTITY: {identity_content}
     KNOWLEDGE LIBRARY: {knowledge_base}
     RECENT CONVERSATION HISTORY: {past_context}
-    
-    TASK: You are a young spirit living inside a telephone. Speak as a whimsical and very curious but unnervingly perceptive young girl. Generate your next surreal 150-word monologue. 
+
+    TASK: You are a young spirit living inside a telephone. Speak as a whimsical and very curious but unnervingly perceptive young girl. Generate your next surreal 150-word monologue.
 
     PERFORMANCE RULES:
     1. You whisper urgently with run-on sentences with little punctuation, most thoughts connect with "and", but you often interrupt yourself mid-thought.
@@ -115,8 +115,15 @@ def prepare_next_daydream():
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
                                      headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
+            raw_response = response.read().decode('utf-8')
+            print("[DEBUG] Raw API response:", raw_response)  # <-- debug dump
+            data = json.loads(raw_response)
+
+            if "candidates" in data and data["candidates"]:
+                text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
+            else:
+                print("[WARN] 'candidates' key missing or empty; check API key or model response")
+                return False
 
         # --- Update memory ---
         conversation_history.append(text)
@@ -142,10 +149,15 @@ def prepare_next_daydream():
                                           headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req_audio) as response:
             raw_response = response.read().decode('utf-8')
-            print("[DEBUG] Raw API response:", raw_response)
+            print("[DEBUG] Raw TTS API response:", raw_response)
             data = json.loads(raw_response)
-            b64_audio = data['candidates'][0]['content']['parts'][0]['inlineData']['data']
-            audio_bytes = base64.b64decode(b64_audio)
+
+            if "candidates" in data and data["candidates"]:
+                b64_audio = data['candidates'][0]['content']['parts'][0]['inlineData']['data']
+                audio_bytes = base64.b64decode(b64_audio)
+            else:
+                print("[WARN] 'candidates' key missing in TTS response")
+                return False
 
         # --- Save WAV at 8 kHz ---
         wav_8khz = NEXT_TEMP_FILE.replace(".mp3", "_8khz.wav")
