@@ -10,28 +10,20 @@ import wave
 import random
 from datetime import datetime
 
-# CLOUD STORAGE IMPORT
 from google.cloud import storage
-
-# IMPORTANT: Ensure phone_processor.py is in the same folder as this script!
 from phone_processor import process_telephone_audio
 
 # --- 1. CONFIGURATION ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# CLOUD BUCKET
 BUCKET_NAME = "image-qustion-bucket"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 AUDIO_DIR = os.path.join(BASE_DIR, "../audio_cache")
-LOCAL_ARCHIVE_DIR = os.path.join(AUDIO_DIR, "archive")  # Local preservation
+LOCAL_ARCHIVE_DIR = os.path.join(AUDIO_DIR, "archive")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(LOCAL_ARCHIVE_DIR, exist_ok=True)
 
 LATEST_FILE_NAME = "audio/latest_daydream.mp3"
-
-# STAGING FILES
 STAGED_PLAYBACK_FILE = os.path.join(AUDIO_DIR, "current_daydream.mp3")
 NEXT_TEMP_FILE = os.path.join(AUDIO_DIR, "next_daydream_temp.mp3")
 
@@ -72,6 +64,7 @@ def prepare_next_daydream():
     global conversation_history
     print(f"[TRIGGER] Prepare next daydream called at {datetime.now()}")
 
+    # --- Identity & knowledge ---
     identity_content = "You are an AI in a telephone."
     if os.path.exists(IDENTITY_FILE):
         with open(IDENTITY_FILE, 'r', encoding='utf-8') as f:
@@ -82,7 +75,10 @@ def prepare_next_daydream():
         with open(KNOWLEDGE_FILE, 'r', encoding='utf-8') as f:
             knowledge_base = f.read()
 
-    past_context = "\n\n".join(conversation_history)
+    # --- Use last MEMORY_LIMIT items from conversation history ---
+    past_context = "\n\n".join(conversation_history[-MEMORY_LIMIT:])
+    if len(past_context) > 1500:
+        past_context = past_context[-1500:]
 
     prompt = f"""
     SYSTEM INSTRUCTIONS & IDENTITY: {identity_content}
@@ -108,29 +104,29 @@ def prepare_next_daydream():
     try:
         # --- Text Generation ---
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.95}
-        }
+        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.95}}
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
                                      headers={'Content-Type': 'application/json'})
+
         with urllib.request.urlopen(req) as response:
             raw_response = response.read().decode('utf-8')
-            print("[DEBUG] Raw API response:", raw_response)  # <-- debug dump
+            print("[DEBUG] Raw API response:", raw_response)
             data = json.loads(raw_response)
 
             if "candidates" in data and data["candidates"]:
                 text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
             else:
-                print("[WARN] 'candidates' key missing or empty; check API key or model response")
+                print("[WARN] 'candidates' key missing; check API key or model response")
                 return False
 
-        # --- Update memory ---
+        # --- Update memory safely ---
         conversation_history.append(text)
         if len(conversation_history) > MEMORY_LIMIT:
-            conversation_history.pop(0)
+            conversation_history = conversation_history[-MEMORY_LIMIT:]
+
         with open(HISTORY_FILE, "a", encoding="utf-8") as f:
             f.write(f"--- {datetime.now()} ---\n{text}\n\n")
+
         upload_to_bucket(HISTORY_FILE, "memory/daydream_history.txt")
 
         # --- TTS ---
@@ -167,22 +163,20 @@ def prepare_next_daydream():
             wav_file.setframerate(8000)
             wav_file.writeframes(audio_bytes)
 
-        # --- Convert to MP3 for web ---
-        mp3_file = NEXT_TEMP_FILE
+        # --- Convert to MP3 ---
         subprocess.run([
             "ffmpeg", "-y", "-i", wav_8khz,
             "-ar", "8000", "-ac", "1",
-            mp3_file
+            NEXT_TEMP_FILE
         ], check=True)
 
         # --- Process for telephone ---
-        process_telephone_audio(mp3_file)
+        process_telephone_audio(NEXT_TEMP_FILE)
 
-        # --- Upload temp MP3 to Cloud ---
-        upload_to_bucket(mp3_file, f"audio/{os.path.basename(mp3_file)}")
+        # --- Upload to Cloud ---
+        upload_to_bucket(NEXT_TEMP_FILE, f"audio/{os.path.basename(NEXT_TEMP_FILE)}")
 
         print(f"[BACKEND] Next daydream ({selected_voice}) generated at {datetime.now()}")
-
         return True
 
     except Exception as e:
@@ -195,39 +189,24 @@ def run_installation():
     print(f"Staged file ready: {STAGED_PLAYBACK_FILE}\n")
 
     iteration = 1
-
     while True:
         try:
             input(f"\n[READY] Press [ENTER] to Pick Up The Phone (Iteration {iteration})...")
-
             play_thread = threading.Thread(target=play_audio, args=(STAGED_PLAYBACK_FILE,))
             prep_thread = threading.Thread(target=prepare_next_daydream)
-
             play_thread.start()
             prep_thread.start()
-
             play_thread.join()
-
             input("[BUSY] Press [ENTER] to hang up and stage the next daydream...")
-
             prep_thread.join()
 
             if os.path.exists(NEXT_TEMP_FILE):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 archive_name = os.path.join(LOCAL_ARCHIVE_DIR, f"daydream_{timestamp}.mp3")
-
-                # --- Preserve locally ---
                 os.rename(NEXT_TEMP_FILE, archive_name)
-
-                # --- Upload archived audio ---
                 upload_to_bucket(archive_name, f"audio/{os.path.basename(archive_name)}")
-
-                # --- Update latest_daydream.mp3 in Cloud ---
                 upload_to_bucket(archive_name, LATEST_FILE_NAME)
-
-                # --- Update staged playback ---
                 os.rename(archive_name, STAGED_PLAYBACK_FILE)
-
                 print(f">> Staged next daydream. Archived locally: {os.path.basename(archive_name)}")
 
             iteration += 1
