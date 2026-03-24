@@ -116,7 +116,7 @@ def prepare_next_daydream():
             if "candidates" in data and data["candidates"]:
                 text = data['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '')
             else:
-                print("[WARN] 'candidates' key missing; check API key or model response")
+                print("[WARN] Full response:", json.dumps(data, indent=2))
                 return False
 
         # --- Update memory safely ---
@@ -130,12 +130,15 @@ def prepare_next_daydream():
         upload_to_bucket(HISTORY_FILE, "memory/daydream_history.txt")
 
         # --- TTS ---
+        # CHANGED: Send plain text only — Gemini TTS does not support SSML and will
+        # fall back to text generation mode if given <speak> tags, causing the
+        # "candidates" missing error. The <break> tags in the generated text are
+        # left in as-is; the model will naturally pause at punctuation instead.
         selected_voice = random.choice(["Aoede", "Puck"])
-        ssml_text = f"<speak><prosody volume='soft' rate='fast' pitch='+15st'><break time='300ms'/>{text}<break time='500ms'/></prosody></speak>"
 
         audio_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_API_KEY}"
         audio_payload = {
-            "contents": [{"parts": [{"text": ssml_text}]}],
+            "contents": [{"parts": [{"text": text}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": selected_voice}}}
@@ -145,30 +148,35 @@ def prepare_next_daydream():
                                           headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req_audio) as response:
             raw_response = response.read().decode('utf-8')
-            print("[DEBUG] Raw TTS API response:", raw_response)
             data = json.loads(raw_response)
 
             if "candidates" in data and data["candidates"]:
                 b64_audio = data['candidates'][0]['content']['parts'][0]['inlineData']['data']
                 audio_bytes = base64.b64decode(b64_audio)
             else:
-                print("[WARN] 'candidates' key missing in TTS response")
+                print("[WARN] Full TTS response:", json.dumps(data, indent=2))
                 return False
 
-        # --- Save WAV at 8 kHz ---
-        wav_8khz = NEXT_TEMP_FILE.replace(".mp3", "_8khz.wav")
-        with wave.open(wav_8khz, "wb") as wav_file:
+        # --- CHANGED: API returns raw PCM (audio/L16) at 24kHz, not MP3.
+        # Write it correctly as a 24kHz WAV first, then let ffmpeg downsample
+        # to 8kHz mono MP3 for telephone output. ---
+        wav_24khz = NEXT_TEMP_FILE.replace(".mp3", "_24khz.wav")
+        with wave.open(wav_24khz, "wb") as wav_file:
             wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(8000)
+            wav_file.setsampwidth(2)      # 16-bit = 2 bytes per sample
+            wav_file.setframerate(24000)  # API outputs at 24kHz
             wav_file.writeframes(audio_bytes)
 
-        # --- Convert to MP3 ---
+        # --- Convert 24kHz WAV -> 8kHz mono MP3 for telephone ---
         subprocess.run([
-            "ffmpeg", "-y", "-i", wav_8khz,
+            "ffmpeg", "-y", "-i", wav_24khz,
             "-ar", "8000", "-ac", "1",
             NEXT_TEMP_FILE
         ], check=True)
+
+        # --- Clean up intermediate WAV ---
+        if os.path.exists(wav_24khz):
+            os.remove(wav_24khz)
 
         # --- Process for telephone ---
         process_telephone_audio(NEXT_TEMP_FILE)
